@@ -1,0 +1,61 @@
+#!/bin/sh
+
+which versionmanager > /dev/null || {
+  echo >&2 "versionmanager not found! Install it using pip or put it in your PATH"
+  exit 1
+}
+
+SEP=----------
+VERSION=patch
+
+commit=$(git log --name-only --format=format:%s%n$SEP -1 HEAD)
+
+is_comment=1
+is_backend=0
+is_frontend=0
+oldifs="$IFS"
+IFS="
+"
+for line in $commit; do
+  if [ "$line" = "$SEP" ]; then
+    is_comment=0
+  elif [ $is_comment -eq 1 ] && [ "$VERSION" = "patch" ]; then
+    echo "$line" | grep -iq 'version bump' && VERSION=minor
+  elif [ $is_comment -eq 0 ]; then
+    [ $is_backend -eq 0 ] && echo "$line" | grep -iq 'backend/' && is_backend=1
+    [ $is_frontend -eq 0 ] && echo "$line" | grep -iq 'frontend/' && is_frontend=1
+  fi
+done
+IFS="$oldifs"
+
+if [ $is_backend -eq 0 ] && [ $is_frontend -eq 0 ]; then
+  exit 0
+fi
+
+dir="$(git rev-parse --show-toplevel)"
+path=$(pwd)
+if [ $is_backend -eq 1 ]; then
+  cd "$dir/backend"
+  versionmanager --bump $VERSION > /dev/null
+  cd "$path"
+  # TODO stash if setup.py is modified
+  git add "$dir/backend/setup.py"
+fi
+
+if [ $is_frontend -eq 1 ]; then
+  cd "$dir/frontend"
+  versionmanager --bump $VERSION > /dev/null
+  cd "$path"
+  # TODO stash if package.json is modified
+  git add "$dir/frontend/package*.json"
+fi
+
+gitdir="$(git rev-parse --git-dir)"
+hook="$gitdir/hooks/post-commit"
+
+# disable post-commit hook temporarily to avoid hook-loop
+[ -x "$hook" ] && chmod -x "$hook"
+
+git commit --amend -C HEAD --no-verify
+
+chmod +x "$hook"
